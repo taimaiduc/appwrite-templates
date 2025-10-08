@@ -3,78 +3,104 @@
 require_once(__DIR__ . '/../vendor/autoload.php');
 
 
-
 return function ($context) {
     $req = $context->req;
     $res = $context->res;
     $log = $context->log;
 
     $uploadPath = '/tmp/upload.png';
+    $maxBytes = 10 * 1024 * 1024; // 10 MB
 
-    // --- POST: Upload ảnh ---
-    if ($req->method === 'POST') {
-        // Đọc toàn bộ dữ liệu nhị phân từ body
-        $data = file_get_contents('php://input');
+    $method = strtoupper($req->method ?? 'GET');
 
-        if (!$data) {
+    // ---------------------- POST (UPLOAD BASE64) ----------------------
+    if ($method === 'POST') {
+        $raw = $req->body ?? file_get_contents('php://input');
+
+        if (!$raw) {
             return $res->json([
                 'success' => false,
-                'error' => 'Không tìm thấy dữ liệu upload hoặc file rỗng',
+                'error' => 'Không tìm thấy dữ liệu body'
             ], 400);
         }
 
-        // Kiểm tra dung lượng tối đa 10 MB
-        if (strlen($data) > 10 * 1024 * 1024) {
+        // Decode JSON
+        $data = json_decode($raw, true);
+        if (!is_array($data)) {
             return $res->json([
                 'success' => false,
-                'error' => 'File vượt quá 10MB cho phép',
+                'error' => 'Body không phải JSON hợp lệ'
             ], 400);
         }
 
-        // --- Validate MIME ---
-        $finfo = new finfo(FILEINFO_MIME_TYPE);
-        $mimeType = $finfo->buffer($data);
-
-        $allowed = ['image/png', 'image/jpeg', 'image/webp'];
-        if (!in_array($mimeType, $allowed)) {
+        if (empty($data['fileData'])) {
             return $res->json([
                 'success' => false,
-                'error' => "Định dạng file không hợp lệ: $mimeType",
+                'error' => 'Thiếu field fileData (base64)'
             ], 400);
         }
 
-        // Ghi file đè (overwrite)
-        file_put_contents($uploadPath, $data);
+        // Lấy base64 string, loại bỏ prefix "data:image/png;base64,"
+        $base64 = preg_replace('#^data:image/\w+;base64,#i', '', $data['fileData']);
+        $binary = base64_decode($base64);
 
-        $log("Đã upload file: $uploadPath ($mimeType)");
+        if ($binary === false) {
+            return $res->json([
+                'success' => false,
+                'error' => 'Không thể decode base64'
+            ], 400);
+        }
+
+        // Validate dung lượng
+        if (strlen($binary) > $maxBytes) {
+            return $res->json([
+                'success' => false,
+                'error' => 'File vượt quá 10MB'
+            ], 400);
+        }
+
+        // Validate định dạng ảnh
+        $imageInfo = @getimagesizefromstring($binary);
+        if ($imageInfo === false) {
+            return $res->json([
+                'success' => false,
+                'error' => 'File không phải ảnh hợp lệ'
+            ], 400);
+        }
+
+        // Lưu file tạm vào /tmp
+        file_put_contents($uploadPath, $binary);
 
         return $res->json([
             'success' => true,
-            'message' => 'Upload thành công!',
-            'mime' => $mimeType,
-            'size_bytes' => strlen($data),
+            'message' => 'Upload thành công',
+            'mime' => $imageInfo['mime'],
+            'width' => $imageInfo[0],
+            'height' => $imageInfo[1],
+            'path' => $uploadPath
         ]);
     }
 
-    // --- GET: Trả về hình ảnh ---
-    if ($req->method === 'GET') {
+    // ---------------------- GET (STREAM IMAGE) ----------------------
+    if ($method === 'GET') {
         if (!file_exists($uploadPath)) {
             return $res->json([
                 'success' => false,
-                'error' => 'Chưa có file nào được upload',
+                'error' => 'Chưa có file nào được upload'
             ], 404);
         }
 
-        $imageData = file_get_contents($uploadPath);
+        $mime = finfo_file(finfo_open(FILEINFO_MIME_TYPE), $uploadPath);
+        $binary = file_get_contents($uploadPath);
 
-        return $res
-            ->setHeader('Content-Type', 'image/png')
-            ->send($imageData);
+        // Trả về binary image
+        $res->setHeader('Content-Type', $mime);
+        return $res->send($binary);
     }
 
-    // --- Không hỗ trợ method khác ---
+    // ---------------------- DEFAULT ----------------------
     return $res->json([
         'success' => false,
-        'error' => 'Method không được hỗ trợ. Chỉ hỗ trợ POST và GET.',
+        'error' => 'Method không hỗ trợ'
     ], 405);
 };
