@@ -2,9 +2,9 @@
 
 require_once(__DIR__ . '/../vendor/autoload.php');
 
-use Appwrite\Functions\Context;
 
-return function (Context $context) {
+
+return function ($context) {
     $req = $context->req;
     $res = $context->res;
     $log = $context->log;
