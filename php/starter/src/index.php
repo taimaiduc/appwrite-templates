@@ -1,87 +1,80 @@
 <?php
 
-require_once(__DIR__ . '/../vendor/autoload.php');
+require_once __DIR__ . '/vendor/autoload.php';
 
-return function ($context) {
+use Appwrite\Functions\Context;
+
+return function (Context $context) {
     $req = $context->req;
     $res = $context->res;
+    $log = $context->log;
 
-    $method = $req->method;
     $uploadPath = '/tmp/upload.png';
-    $maxSize = 10 * 1024 * 1024; // 10MB
 
-    if ($method === 'POST') {
-        // Log header để xem Appwrite gửi gì
-        $context->log('Headers: ' . json_encode($req->headers));
+    // --- POST: Upload ảnh ---
+    if ($req->method === 'POST') {
+        // Đọc toàn bộ dữ liệu nhị phân từ body
+        $data = file_get_contents('php://input');
 
-        // Đọc toàn bộ request body (raw multipart)
-        $body = $req->body;
-        if (empty($body)) {
-            return $res->json(['error' => 'Body trống, không có dữ liệu upload'], 400);
+        if (!$data) {
+            return $res->json([
+                'success' => false,
+                'error' => 'Không tìm thấy dữ liệu upload hoặc file rỗng',
+            ], 400);
         }
 
-        // Lấy boundary từ header Content-Type
-        $contentType = $req->headers['content-type'] ?? '';
-        if (!preg_match('/boundary=(.*)$/', $contentType, $matches)) {
-            return $res->json(['error' => 'Không tìm thấy boundary trong Content-Type'], 400);
+        // Kiểm tra dung lượng tối đa 10 MB
+        if (strlen($data) > 10 * 1024 * 1024) {
+            return $res->json([
+                'success' => false,
+                'error' => 'File vượt quá 10MB cho phép',
+            ], 400);
         }
 
-        $boundary = $matches[1];
+        // --- Validate MIME ---
+        $finfo = new finfo(FILEINFO_MIME_TYPE);
+        $mimeType = $finfo->buffer($data);
 
-        // Tách các phần multipart
-        $parts = explode("--$boundary", $body);
-
-        $foundFile = false;
-
-        foreach ($parts as $part) {
-            // Mỗi part chứa header + dữ liệu
-            if (strpos($part, 'Content-Disposition: form-data;') !== false) {
-                // Lấy tên field
-                if (preg_match('/name="([^"]+)"/', $part, $nameMatch)) {
-                    $name = $nameMatch[1];
-                    if ($name === 'file') {
-                        $foundFile = true;
-                        // Tách header và nội dung file
-                        $sections = explode("\r\n\r\n", $part, 2);
-                        if (count($sections) === 2) {
-                            $fileData = rtrim($sections[1], "\r\n");
-                            file_put_contents($uploadPath, $fileData);
-                            break;
-                        }
-                    }
-                }
-            }
+        $allowed = ['image/png', 'image/jpeg', 'image/webp'];
+        if (!in_array($mimeType, $allowed)) {
+            return $res->json([
+                'success' => false,
+                'error' => "Định dạng file không hợp lệ: $mimeType",
+            ], 400);
         }
 
-        if (!$foundFile) {
-            return $res->json(['error' => 'Không tìm thấy file trong multipart'], 400);
-        }
+        // Ghi file đè (overwrite)
+        file_put_contents($uploadPath, $data);
 
-        // Validate kích thước file
-        if (filesize($uploadPath) > $maxSize) {
-            unlink($uploadPath);
-            return $res->json(['error' => 'File quá lớn, tối đa 10MB'], 400);
-        }
+        $log("Đã upload file: $uploadPath ($mimeType)");
 
-        // Validate là ảnh
-        $fileInfo = @getimagesize($uploadPath);
-        if ($fileInfo === false) {
-            unlink($uploadPath);
-            return $res->json(['error' => 'File không phải là ảnh hợp lệ'], 400);
-        }
-
-        return $res->json(['success' => true, 'message' => 'Upload thành công']);
+        return $res->json([
+            'success' => true,
+            'message' => 'Upload thành công!',
+            'mime' => $mimeType,
+            'size_bytes' => strlen($data),
+        ]);
     }
 
-    if ($method === 'GET') {
+    // --- GET: Trả về hình ảnh ---
+    if ($req->method === 'GET') {
         if (!file_exists($uploadPath)) {
-            return $res->json(['error' => 'Chưa có file nào được upload'], 404);
+            return $res->json([
+                'success' => false,
+                'error' => 'Chưa có file nào được upload',
+            ], 404);
         }
 
         $imageData = file_get_contents($uploadPath);
-        $res->addHeader('Content-Type', 'image/png');
-        return $res->send($imageData);
+
+        return $res
+            ->setHeader('Content-Type', 'image/png')
+            ->send($imageData);
     }
 
-    return $res->json(['error' => 'Phương thức không được hỗ trợ'], 405);
+    // --- Không hỗ trợ method khác ---
+    return $res->json([
+        'success' => false,
+        'error' => 'Method không được hỗ trợ. Chỉ hỗ trợ POST và GET.',
+    ], 405);
 };
