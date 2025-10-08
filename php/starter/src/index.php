@@ -2,40 +2,56 @@
 
 require_once(__DIR__ . '/../vendor/autoload.php');
 
-use Appwrite\Client;
-use Appwrite\Services\Users;
-
-// This Appwrite function will be executed every time your function is triggered
 return function ($context) {
-    // You can use the Appwrite SDK to interact with other services
-    // For this example, we're using the Users service
-    $client = new Client();
-    $client
-        ->setEndpoint(getenv('APPWRITE_FUNCTION_API_ENDPOINT'))
-        ->setProject(getenv('APPWRITE_FUNCTION_PROJECT_ID'))
-        ->setKey($context->req->headers['x-appwrite-key']);
-    $users = new Users($client);
+    $req = $context->req;
+    $res = $context->res;
 
-    try {
-        $response = $users->list();
-        // Log messages and errors to the Appwrite Console
-        // These logs won't be seen by your end users
-        $context->log('Total users: ' . $response['total']);
-    } catch(Throwable $error) {
-        $context->error('Could not list users: ' . $error->getMessage());
+    $method = $req->method;
+    $uploadPath = '/tmp/upload.png';
+    $maxSize = 10 * 1024 * 1024; // 10MB
+
+    if ($method === 'POST') {
+        // Kiểm tra có file upload
+        if (empty($_FILES['file'])) {
+            return $res->json(['error' => 'Không tìm thấy file upload'], 400);
+        }
+
+        $file = $_FILES['file'];
+
+        // Kiểm tra lỗi upload
+        if ($file['error'] !== UPLOAD_ERR_OK) {
+            return $res->json(['error' => 'Lỗi upload: ' . $file['error']], 400);
+        }
+
+        // Kiểm tra dung lượng
+        if ($file['size'] > $maxSize) {
+            return $res->json(['error' => 'File quá lớn, tối đa 10MB'], 400);
+        }
+
+        // Kiểm tra định dạng ảnh
+        $fileInfo = getimagesize($file['tmp_name']);
+        if ($fileInfo === false) {
+            return $res->json(['error' => 'File không phải là ảnh hợp lệ'], 400);
+        }
+
+        // Ghi file vào /tmp (overwrite)
+        if (!move_uploaded_file($file['tmp_name'], $uploadPath)) {
+            return $res->json(['error' => 'Không thể lưu file'], 500);
+        }
+
+        return $res->json(['success' => true, 'message' => 'Upload thành công']);
     }
 
-    // The req object contains the request data
-    if ($context->req->path === '/ping') {
-        // Use res object to respond with text(), json(), or binary()
-        // Don't forget to return a response!
-        return $context->res->text('Pong');
+    if ($method === 'GET') {
+        if (!file_exists($uploadPath)) {
+            return $res->json(['error' => 'Chưa có file nào được upload'], 404);
+        }
+
+        $imageData = file_get_contents($uploadPath);
+        $res->addHeader('Content-Type', 'image/png');
+        return $res->send($imageData);
     }
 
-    return $context->res->json([
-        'motto' => 'Build like a team of hundreds_',
-        'learn' => 'https://appwrite.io/docs',
-        'connect' => 'https://appwrite.io/discord',
-        'getInspired' => 'https://builtwith.appwrite.io',
-    ]);
+    // Mặc định: Phương thức không hợp lệ
+    return $res->json(['error' => 'Phương thức không được hỗ trợ'], 405);
 };
