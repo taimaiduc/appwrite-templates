@@ -11,30 +11,31 @@ return function ($context) {
     $maxSize = 10 * 1024 * 1024; // 10MB
 
     if ($method === 'POST') {
-        // Kiểm tra có file upload
-        if (empty($_FILES['file'])) {
+        $files = $req->files ?? [];
+
+        if (empty($files) || !isset($files['file'])) {
             return $res->json(['error' => 'Không tìm thấy file upload'], 400);
         }
 
-        $file = $_FILES['file'];
+        $file = $files['file'];
 
-        // Kiểm tra lỗi upload
-        if ($file['error'] !== UPLOAD_ERR_OK) {
-            return $res->json(['error' => 'Lỗi upload: ' . $file['error']], 400);
+        // Validate lỗi upload
+        if (!isset($file['tmp_name']) || $file['error'] !== UPLOAD_ERR_OK) {
+            return $res->json(['error' => 'Lỗi upload'], 400);
         }
 
-        // Kiểm tra dung lượng
+        // Validate dung lượng
         if ($file['size'] > $maxSize) {
             return $res->json(['error' => 'File quá lớn, tối đa 10MB'], 400);
         }
 
-        // Kiểm tra định dạng ảnh
+        // Validate loại file
         $fileInfo = getimagesize($file['tmp_name']);
         if ($fileInfo === false) {
             return $res->json(['error' => 'File không phải là ảnh hợp lệ'], 400);
         }
 
-        // Ghi file vào /tmp (overwrite)
+        // Lưu file (overwrite)
         if (!move_uploaded_file($file['tmp_name'], $uploadPath)) {
             return $res->json(['error' => 'Không thể lưu file'], 500);
         }
@@ -52,6 +53,5 @@ return function ($context) {
         return $res->send($imageData);
     }
 
-    // Mặc định: Phương thức không hợp lệ
     return $res->json(['error' => 'Phương thức không được hỗ trợ'], 405);
 };
